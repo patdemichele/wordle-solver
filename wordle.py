@@ -2,7 +2,7 @@ from wordfreq import get_frequency_dict
 import numpy as np
 
 # distribution size such that beyond this size we "compactify" the distribution by sampling it, in certain cases.
-MAX_DISTRIBUTION_SIZE = 100
+MAX_DISTRIBUTION_SIZE = 200
 
 def normalize(distribution):
   if len(distribution) == 0:
@@ -22,11 +22,15 @@ def compact_distribution(distribution):
   # otherwise, sample it
   a = [k for k in distribution]
   p = [distribution[k] for k in a]
-  return {k:1.0/MAX_DISTRIBUTION_SIZE for k in np.random.choice(a, MAX_DISTRIBUTION_SIZE, replace=True, p=p)}
+  choices = np.random.choice(a, MAX_DISTRIBUTION_SIZE, replace=True, p=p)
+  result = {}
+  for c in choices:
+    result[c] = result.get(c, 0) + 1.0/MAX_DISTRIBUTION_SIZE
+  return result
 
 # get the distribution of length-5 words we want to use
 
-all_words = get_frequency_dict('en')
+all_words = get_frequency_dict('en', wordlist='small')
 five_dict = {k: all_words[k] for k in all_words if len(k) == 5}
 five_dict = normalize(five_dict)
 print(len(five_dict))
@@ -112,14 +116,16 @@ def get_best_guesses(candidates):
   for true_word in data:
     p_true_word = data[true_word]
     iter_num += 1
-    for guess in candidates:
+    for guess in data:
       entropy_reduction = current_entropy - compute_new_entropy(candidates, true_word, guess)
       # in computing expected value, need to weight this by the true word probability
       # use 1/N because we are sampling
       expected_entropy_reduction[guess] += p_true_word * entropy_reduction
   
-  topk = min(len(candidates), 5)
-  return sorted(candidates, key=candidates.get, reverse=True)[:topk]
+  topk = min(len(expected_entropy_reduction), 5)
+  print(expected_entropy_reduction)
+  return sorted(expected_entropy_reduction, key=expected_entropy_reduction.get, reverse=True)[:topk]
+
 
 def coloring_from_string(coloring_string):
   if len(coloring_string) != 5:
