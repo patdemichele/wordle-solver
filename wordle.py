@@ -1,13 +1,12 @@
-
-
 from wordfreq import get_frequency_dict
 import numpy as np
 
-
-#five_dict = {"HELLO": 0.1, "FLUFF": 0.5, "FRETS": 0.4}
-
+# distribution size such that beyond this size we "compactify" the distribution by sampling it, in certain cases.
+MAX_DISTRIBUTION_SIZE = 100
 
 def normalize(distribution):
+  if len(distribution) == 0:
+    return {}
   psum = 0
   for k in distribution:
     psum += distribution[k]
@@ -16,13 +15,23 @@ def normalize(distribution):
   return {k: distribution[k]/psum for k in distribution}
 
 
-all_words = get_frequency_dict('en', wordlist='small')
+def compact_distribution(distribution):
+  # if the distribution is small, just use the distribution
+  if len(distribution) <= MAX_DISTRIBUTION_SIZE:
+    return distribution
+  # otherwise, sample it
+  a = [k for k in distribution]
+  p = [distribution[k] for k in a]
+  return {k:1.0/MAX_DISTRIBUTION_SIZE for k in np.random.choice(a, MAX_DISTRIBUTION_SIZE, replace=True, p=p)}
+
+# get the distribution of length-5 words we want to use
+
+all_words = get_frequency_dict('en')
 five_dict = {k: all_words[k] for k in all_words if len(k) == 5}
-five_dict = normalize({k: five_dict[k] for k in five_dict if five_dict[k] > 1e-5})
+five_dict = normalize(five_dict)
 print(len(five_dict))
 
-
-
+# used in get_coloring_from_guess
 def get_hist(word):
   h = {}
   for c in word:
@@ -35,9 +44,7 @@ def get_hist(word):
 # there is at least one more letter in the true_word of that letter.
 def get_coloring_from_guess(true_word, guess):
   assert(len(true_word) == 5 and len(guess) == 5)
-
   result = [0, 0, 0, 0, 0]
-  
   true_hist = get_hist(true_word)
 
   # mark the greens  
@@ -60,20 +67,10 @@ def get_coloring_from_guess(true_word, guess):
 
 # Boolean: whether candidate could be the true word
 # if guess yields coloring
-def matches_coloring(candidate, guess, coloring):
-  return get_coloring_from_guess(candidate, guess) == coloring
+def matches_coloring(true_word, guess, coloring):
+  return get_coloring_from_guess(true_word, guess) == coloring
 
-# returns a normalized conditional distribution given a guess and coloring
-def prune_candidates(candidates, guess, coloring):
-  psum = 0
-  new_candidates = {}
-  for word in candidates:
-    if matches_coloring(word, guess, coloring):
-      p = candidates[word]
-      new_candidates[word] = p
-  # normalized
-  return normalize(new_candidates)
-
+# computes the entropy of a distribution
 def compute_entropy(distribution):
   s = 0
   for k in distribution:
@@ -81,33 +78,48 @@ def compute_entropy(distribution):
     s += (- np.log(p) * p)
   return s
 
+# prunes candidates. will use compactified distribution unless approximate=False
+def prune_candidates(candidates, guess, coloring, approximate=True):
+  marginal_dist = {}
+  if approximate:
+    data = compact_distribution(candidates)
+  else:
+    data = candidates
+  for word in data:
+    p_word = data[word]
+    if matches_coloring(word, guess, coloring):
+      marginal_dist[word] = marginal_dist.get(word, 0) + p_word
+  return normalize(marginal_dist)
+
+
+# computation of new entropy .
+# note that prune_candidates is approximate (based on sampling) when the data set has larger than 100 words
+def compute_new_entropy(candidates, true_word, guess):
+  coloring = get_coloring_from_guess(true_word, guess)
+  pruned = prune_candidates(candidates, guess, coloring)
+  return compute_entropy(pruned)
+
 # candidates: a dict of probabilities. should sum to 1.
-def get_best_guess(candidates):
+def get_best_guesses(candidates):
 
   current_entropy = compute_entropy(candidates)
   expected_entropy_reduction = {k: 0 for k in candidates}
 
   # sum over all words in candidates according to their weights
-  for true_word in candidates:
+  # use sampling
+  iter_num = 0
+  data = compact_distribution(candidates)
+  for true_word in data:
+    p_true_word = data[true_word]
+    iter_num += 1
     for guess in candidates:
-      # what the distribution would be after this guess, for this true word
-      pruned = prune_candidates(candidates, guess, get_coloring_from_guess(true_word, guess))
-      entropy_reduction = current_entropy - compute_entropy(pruned)
+      entropy_reduction = current_entropy - compute_new_entropy(candidates, true_word, guess)
       # in computing expected value, need to weight this by the true word probability
-      p_true_word = candidates[true_word]
+      # use 1/N because we are sampling
       expected_entropy_reduction[guess] += p_true_word * entropy_reduction
-
-  best = 0
-  best_key = None
-  for k in candidates:
-    print(k, expected_entropy_reduction[k])
-    if expected_entropy_reduction[k] > best:
-      best_key = k
-      best = expected_entropy_reduction[k]
-
-  # debugging
-  print("Best entropy reduction = ", best)
-  return best_key
+  
+  topk = min(len(candidates), 5)
+  return sorted(candidates, key=candidates.get, reverse=True)[:topk]
 
 def coloring_from_string(coloring_string):
   if len(coloring_string) != 5:
@@ -120,18 +132,29 @@ def coloring_from_string(coloring_string):
   return result
 
 
-
 if __name__ == "__main__":
-  print("Welcome! This Wordle utility will suggest a guess for you.")
-  print("After submitting, please type the coloring of that guess and hit enter.")
+  print("Welcome! This Wordle utility will suggest a guess for you on each round.")
+  print("After submitting to Wordle, please type the coloring of that guess and hit enter.")
   print("Write 0 for black, 1 for gold, and 2 for green. So, you may type 01002[enter], e.g..")
   print("If that coloring was not 22222 (all green), the utility will provide you the next guess, and so on.")
+  print("......................")
+  print(" ")
 
   candidates = five_dict.copy()
+  round_number = 1
   while True:
-    print("Total candidates = ", len(candidates))
-    guess = get_best_guess(candidates)
-    print("The utility suggests you guess: " + guess)
+    print("ROUND ", round_number)
+    guess = "tears"
+    if round_number == 1:
+      print("It is Round 1, which means that you have zero information from the Wordle board.")
+      print("Assuming Wordle uses words at a frequency similar to spoken English, you should guess `tears`.")
+    else:
+        print("Total candidate words = ", len(candidates))
+        print("Thinking...")
+        guesses = get_best_guesses(candidates)
+        print("Here are your recommended guesses, best guess first: ", guesses)
+        print("Please type the guess you ended up actually using (lowercase, no quotes). ")
+        guess = input("")
     coloring = None
     while True:
       coloring = coloring_from_string(input("Ok... what coloring did this yield?"))
@@ -142,8 +165,14 @@ if __name__ == "__main__":
     if coloring == [2, 2, 2, 2, 2]:
       print("Nice!")
       break
-    candidates = prune_candidates(candidates, guess, coloring)
+    # prune candidates. approximate=False because we want to include every word
+    candidates = prune_candidates(candidates, guess, coloring, approximate=False)
+    if len(candidates) == 1:
+      print("Only one candidate left: you should guess ", [x for x in candidates][0])
+      break
     if not candidates:
       print("Oh no! Wordle has a word in mind that is not in our dictionary.")
       break
-
+    print("...........")
+    print(" ")
+    round_number += 1
