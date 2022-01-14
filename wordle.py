@@ -2,8 +2,8 @@ from wordfreq import get_frequency_dict
 import numpy as np
 import sys
 
-WORDLE_GUESSES_FILENAME = "guess.txt"
-WORDLE_ANSWERS_FILENAME = "answers.txt"
+WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses.txt"
+WORDLE_ANSWERS_FILENAME = "wordlist_solutions.txt"
 
 
 # distribution size such that beyond this size we "compactify" the distribution by sampling it, in certain cases.
@@ -99,23 +99,28 @@ def prune_candidates(candidates, guess, coloring, approximate=True):
 def compute_new_entropy(candidates, true_word, guess):
   coloring = get_coloring_from_guess(true_word, guess)
   pruned = prune_candidates(candidates, guess, coloring)
-  return compute_entropy(pruned)
+  ret = compute_entropy(pruned)
+  #print("new entropy = ", ret)
+  return ret
 
 # candidates: a dict of probabilities. should sum to 1.
 def get_best_guesses(candidates, allowed_guesses, exhaustive=False):
 
   current_entropy = compute_entropy(candidates)
-  expected_entropy_reduction = {k: 0 for k in candidates}
 
   # sum over all words in candidates according to their weights
   # use sampling
   iter_num = 0
   data = compact_distribution(candidates)
+  # in the exhaustive case, check the quality of all guesses
   if exhaustive:
-    guesses_to_check = allowed_guesses
+    guesses_to_check = allowed_guesses 
+  # normal case: compute entropy reduction of guesses in data that are allowed guesses
   else:
-    # typical case: just check a sampling of guesses.
-    guesses_to_check = [guess for in guess in data if guess in guesses_to_check]
+    guesses_to_check = [guess for guess in data if guess in allowed_guesses]
+
+  expected_entropy_reduction = {k:0 for k in guesses_to_check}
+  
   for true_word in data:
     p_true_word = data[true_word]
     iter_num += 1
@@ -126,7 +131,8 @@ def get_best_guesses(candidates, allowed_guesses, exhaustive=False):
       expected_entropy_reduction[guess] += p_true_word * entropy_reduction
   
   topk = min(len(expected_entropy_reduction), 5)
-  print(expected_entropy_reduction)
+  #print(expected_entropy_reduction)
+  #import pdb; pdb.set_trace()
   return sorted(expected_entropy_reduction, key=expected_entropy_reduction.get, reverse=True)[:topk]
   #return sorted(data, key=data.get, reverse=True)[:topk]
 
@@ -152,26 +158,32 @@ def get_custom_distribution(path):
   # file can either be line separated words (then they are all weighted equally), or word weight\n word weight\n, etc
   done_first_line = False
   weights = False
-  with f as open(path, 'r'):
+  with open(path, 'r') as f:
     for line in f:
+      print(line)
       sp = line.split(" ")
-      if len(sp) == 2:
+      # skip empty lines
+      if len(sp) == 0:
+        continue
+      elif len(sp) == 2:
         if done_first_line and not weights:
           return None
-        word = sp[0]
+        word = sp[0].strip().lower()
+        if len(word) != 5:
+          return None
         weight = float(sp[1])
         d[word] = weight
         weights = True
       elif len(sp) == 1:
         if done_first_line and weights:
           return None
-        word = sp[0]
+        word = sp[0].strip().lower()
         d[word] = 1.0 # will be normalized
         weights = False
       else:
         return None # bad line
       done_first_line = True
-  return d
+  return normalize(d)
 
 def get_wordle_uniform_distribution():
   return get_custom_distribution(WORDLE_ANSWERS_FILENAME)
@@ -207,6 +219,9 @@ if __name__ == "__main__":
     if len(sys.argv) < 3:
       report_usage_and_exit()
     answer_distribution = get_custom_distribution(sys.argv[2])
+    if not answer_distribution:
+      print("Error loading custom distribution. See guidelines on Github.")
+      exit(0)
   else:
     report_usage_and_exit()
 
@@ -218,17 +233,24 @@ if __name__ == "__main__":
   print("Welcome! This Wordle utility will suggest a guess for you on each round.")
   print("After submitting to Wordle, please type the coloring of that guess and hit enter.")
   print("Write 0 for black, 1 for gold, and 2 for green. So, you may type 01002[enter], e.g..")
-  print("If that coloring was not 22222 (all green), the utility will provide you the next guess, and so on.")
+  print("If that coloring was not 22222 (all green), the utility will update the posterior distribution and provide you the next guess, and so on.")
   print("......................")
   print(" ")
 
+
+  # UNIFORM Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
+  # ENGLISH Here are your recommended guesses, best guess first:  ['slate', 'saner', 'stone', 'least', 'roast']
+  precomputed_first_guesses = {"english": "slate", "uniform": "alter"}
+
   round_number = 1
   while True:
-    print("ROUND ", round_number)
-    guess = "heart"
-    if round_number == 1 and not compute_first_guess:
+    print("----- ROUND", round_number, "-----")
+
+    # because round 1 is always the same guess for a given distribution, we help ourselves out by remembering the guesses.
+    if round_number == 1 and (not compute_first_guess) and distribution_option in precomputed_first_guesses:
+      guess = precomputed_first_guesses[distribution_option]
       print("It is Round 1, which means that you have zero information from the Wordle board.")
-      print("Assuming Wordle uses words at a frequency similar to spoken English, you should guess `heart`.")
+      print("Assuming Wordle uses words at a frequency similar to spoken English, you should guess: ", guess)
     else:
         print("Total candidate words = ", len(answer_distribution))
         print("Thinking...")
