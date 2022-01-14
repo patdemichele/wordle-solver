@@ -5,6 +5,13 @@ import sys
 WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses.txt"
 WORDLE_ANSWERS_FILENAME = "wordlist_solutions.txt"
 
+WORDLE_TEST_FILENAME = "wordle_archive.txt"
+
+# for the unchanging uniform and english distributions, we can save time by precomputing the first guess.
+# UNIFORM Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
+# ENGLISH Here are your recommended guesses, best guess first:  ['slate', 'saner', 'stone', 'least', 'roast']
+precomputed_first_guesses = {"english": "slate", "uniform": "alter"}
+
 
 # distribution size such that beyond this size we "compactify" the distribution by sampling it, in certain cases.
 MAX_DISTRIBUTION_SIZE = 200
@@ -104,14 +111,13 @@ def compute_new_entropy(candidates, true_word, guess):
   return ret
 
 # candidates: a dict of probabilities. should sum to 1.
-def get_best_guesses(candidates, allowed_guesses, exhaustive=False):
+def get_best_guesses(answer_distribution, allowed_guesses, exhaustive=False):
 
-  current_entropy = compute_entropy(candidates)
+  current_entropy = compute_entropy(answer_distribution)
 
   # sum over all words in candidates according to their weights
   # use sampling
-  iter_num = 0
-  data = compact_distribution(candidates)
+  data = compact_distribution(answer_distribution)
   # in the exhaustive case, check the quality of all guesses
   if exhaustive:
     guesses_to_check = allowed_guesses 
@@ -123,18 +129,33 @@ def get_best_guesses(candidates, allowed_guesses, exhaustive=False):
   
   for true_word in data:
     p_true_word = data[true_word]
-    iter_num += 1
     for guess in guesses_to_check:
-      entropy_reduction = current_entropy - compute_new_entropy(candidates, true_word, guess)
+      entropy_reduction = current_entropy - compute_new_entropy(answer_distribution, true_word, guess)
       # in computing expected value, need to weight this by the true word probability
       # use 1/N because we are sampling
       expected_entropy_reduction[guess] += p_true_word * entropy_reduction
+ 
   
-  topk = min(len(expected_entropy_reduction), 5)
-  #print(expected_entropy_reduction)
-  #import pdb; pdb.set_trace()
-  return sorted(expected_entropy_reduction, key=expected_entropy_reduction.get, reverse=True)[:topk]
-  #return sorted(data, key=data.get, reverse=True)[:topk]
+  # invert the expected_entropy_reduction map
+  reduction_amount_to_words = {}
+  for word in expected_entropy_reduction:
+    # no point considering words that are not allowed guesses
+    if word not in allowed_guesses:
+      continue
+    amt = expected_entropy_reduction[word]
+    # add word to list of words that have this entropy reduction
+    reduction_amount_to_words[amt] = reduction_amount_to_words.get(amt, []) + [word]
+
+  best_words = []  
+  while len(best_words) < min(5, len(expected_entropy_reduction)):
+    amt = max(reduction_amount_to_words)
+    # list of words, with the most likely one first
+    words = sorted(reduction_amount_to_words[amt], key=lambda k: answer_distribution.get(k, 0.0), reverse=True)
+    best_words += words
+    del reduction_amount_to_words[amt]
+  best_words = best_words[:5]
+
+  return best_words 
 
 def coloring_from_string(coloring_string):
   if len(coloring_string) != 5:
@@ -149,7 +170,7 @@ def coloring_from_string(coloring_string):
 
 # get the distribution of length-5 words we want to use
 def get_wordfreq_distribution():
-  all_words = get_frequency_dict('en', wordlist='small')
+  all_words = get_frequency_dict('en', wordlist='large')
   five_dict = {k: all_words[k] for k in all_words if len(k) == 5}
   return normalize(five_dict)
 
@@ -160,7 +181,6 @@ def get_custom_distribution(path):
   weights = False
   with open(path, 'r') as f:
     for line in f:
-      print(line)
       sp = line.split(" ")
       # skip empty lines
       if len(sp) == 0:
@@ -199,48 +219,76 @@ def load_guesses_from_file(guesses_filename):
 
 
 def report_usage_and_exit():
-  print("Usage:\nEither `python3 wordle.py english`, `python3 wordle.py uniform`, or `python3 wordle.py custom path/to/prior_distribution.txt`")
-  print("See Github for instructions.")
+  print("Usage: The prior distribution is specified in first 2 or 3 args.\nValid options are: `python3 wordle.py english`, `python3 wordle.py uniform`, or `python3 wordle.py custom path/to/prior_distribution.txt`")
+  print("After specifying the prior distribution, you may optionally add the flags --compute-first-guess and/or --exhaustive, which change the wordle solver's algorithm.")
+  print("By default, the wordle utility will help you through a real game of wordle. Adding the flag --test will instead simulate wordle games on each word in WORDLE_TEST_FILENAME, and report statistics.")
+  print("Adding the flag --testword=[five-letter-word] will simulate a single wordle game on a specific word. Do not use quotes.")
+  print("Flags can be in any order after the arguments which specify the prior distribution.")
+  print("The utility only pays attention to the first --testword, and ignores any --testword if --test is also specified.")
+  print("See Github for more detailed meaning of each flag.")
   exit(0)
 
-if __name__ == "__main__":
+def detect_test_flag(argv):
+  if "--test" in argv:
+    return (True, None)
+  prefix = "--testword="
+  for arg in argv:
+    if arg[:len(prefix)] == prefix:
+      return (True, arg[len(prefix):])
+  return (False, None)
 
-  print("Parsing command line arguments and loading distribution...")
 
-  # parse command line arguments
-  if len(sys.argv) < 2:
-    report_usage_and_exit()
-  distribution_option = sys.argv[1]
-  if distribution_option == "english":
-    answer_distribution = get_wordfreq_distribution()
-  elif distribution_option == "uniform":
-    answer_distribution = get_wordle_uniform_distribution()
-  elif distribution_option == "custom":
-    if len(sys.argv) < 3:
-      report_usage_and_exit()
-    answer_distribution = get_custom_distribution(sys.argv[2])
-    if not answer_distribution:
-      print("Error loading custom distribution. See guidelines on Github.")
-      exit(0)
-  else:
-    report_usage_and_exit()
+def simulate_wordle_on_word(word_data, config, word):
+  answer_distribution, allowed_guesses = word_data
+  distribution_option, exhaustive, compute_first_guess = config
+  if word not in answer_distribution or word not in allowed_guesses:
+    return -1 # can't simulate this wordle
+  round_number = 1
+  while True:
+    if round_number == 1 and (not compute_first_guess) and distribution_option in precomputed_first_guesses:
+      guess = precomputed_first_guesses[distribution_option]
+    else:
+      guesses = get_best_guesses(answer_distribution, allowed_guesses, exhaustive)
+      guess = guesses[0] # in simulation, always use best guess
+    coloring = get_coloring_from_guess(word, guess)
+    if coloring == [2, 2, 2, 2, 2]:
+      break
+    answer_distribution = prune_candidates(answer_distribution, guess, coloring, approximate=False)
+    round_number += 1
+  return round_number
 
-  allowed_guesses = load_guesses_from_file(WORDLE_GUESSES_FILENAME)
+def display_turns(turns):
+  return "INVALID_WORD" if turns == -1 else turns
 
-  exhaustive = "--exhaustive" in sys.argv
-  compute_first_guess = "--compute-first-guess" in sys.argv
+def test_and_report_on_specific_word(word_data, config, specific_word):
+  turns = simulate_wordle_on_word(word_data, config, specific_word)
+  print(specific_word, display_turns(turns))
 
+def test_and_report_on_test_set(word_data, config):
+  f = open(WORDLE_TEST_FILENAME, 'r')
+  stats = []
+  failures = []
+  for line in f:
+    word = line.strip()
+    turns = simulate_wordle_on_word(word_data, config, word)
+    print(word, display_turns(turns))
+  f.close()
+  
+  print("Failures: ", failures)
+  print("Means # turns on successful words: ", stats.sum()/max(1, len(stats)))
+  
+
+def play_guessing_game(word_data, config):
   print("Welcome! This Wordle utility will suggest a guess for you on each round.")
   print("After submitting to Wordle, please type the coloring of that guess and hit enter.")
   print("Write 0 for black, 1 for gold, and 2 for green. So, you may type 01002[enter], e.g..")
   print("If that coloring was not 22222 (all green), the utility will update the posterior distribution and provide you the next guess, and so on.")
   print("......................")
   print(" ")
-
-
-  # UNIFORM Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
-  # ENGLISH Here are your recommended guesses, best guess first:  ['slate', 'saner', 'stone', 'least', 'roast']
-  precomputed_first_guesses = {"english": "slate", "uniform": "alter"}
+  
+  # unpack
+  answer_distribution, allowed_guesses = word_data
+  distribution_option, exhaustive, compute_first_guess = config
 
   round_number = 1
   while True:
@@ -279,3 +327,48 @@ if __name__ == "__main__":
     print("...........")
     print(" ")
     round_number += 1
+
+
+if __name__ == "__main__":
+
+  print("Parsing command line arguments and loading distribution...")
+
+  # parse command line arguments
+  if len(sys.argv) < 2:
+    report_usage_and_exit()
+  distribution_option = sys.argv[1]
+  if distribution_option == "english":
+    answer_distribution = get_wordfreq_distribution()
+  elif distribution_option == "uniform":
+    answer_distribution = get_wordle_uniform_distribution()
+  elif distribution_option == "custom":
+    if len(sys.argv) < 3:
+      report_usage_and_exit()
+    answer_distribution = get_custom_distribution(sys.argv[2])
+    if not answer_distribution:
+      print("Error loading custom distribution. See guidelines on Github.")
+      exit(0)
+  else:
+    report_usage_and_exit()
+
+  allowed_guesses = load_guesses_from_file(WORDLE_GUESSES_FILENAME)
+
+  exhaustive = "--exhaustive" in sys.argv
+  compute_first_guess = "--compute-first-guess" in sys.argv
+  
+  word_data = (answer_distribution, allowed_guesses)
+  config = (distribution_option, exhaustive, compute_first_guess)
+
+  # decide what action to take
+  do_test, specific_word = detect_test_flag(sys.argv)
+  # report test on specific word
+  if do_test and specific_word:
+    test_and_report_on_specific_word(word_data, config, specific_word)
+  # report test on all test set
+  elif do_test:
+    test_and_report_on_test_set(word_data, config)
+  # else: wordle assist utility
+  else:
+    play_guessing_game(word_data, config)  
+
+  
