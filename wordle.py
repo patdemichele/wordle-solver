@@ -320,7 +320,7 @@ def play_guessing_game(word_data, config):
         guess = input("")
     coloring = None
     while True:
-      coloring = coloring_from_string(input("Ok... what coloring did this yield?"))
+      coloring = coloring_from_string(input("Ok... what coloring did this yield? "))
       if not coloring:
         print("Invalid coloring. Remember, you should type 5 numbers with no spaces, like 12121, and hit enter.")
       else:
