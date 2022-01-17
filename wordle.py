@@ -2,15 +2,15 @@ from wordfreq import get_frequency_dict
 import numpy as np
 import sys
 
-WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses.txt"
+WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses2.txt"
 WORDLE_ANSWERS_FILENAME = "wordlist_solutions.txt"
 
-WORDLE_TEST_FILENAME = "wordle_archive.txt"
+WORDLE_TEST_FILENAME = "wordlist_solutions.txt"
 
 # for the unchanging uniform and english distributions, we can save time by precomputing the first guess.
-# UNIFORM Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
+# UNIFORM_SOLUTION Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
 # ENGLISH Here are your recommended guesses, best guess first:  ['slate', 'saner', 'stone', 'least', 'roast']
-precomputed_first_guesses = {"english": "slate", "uniform": "alter"}
+precomputed_first_guesses = {"english": "slate", "uniform_solution": "alter"}
 
 
 # distribution size such that beyond this size we "compactify" the distribution by sampling it, in certain cases.
@@ -205,7 +205,7 @@ def get_custom_distribution(path):
       done_first_line = True
   return normalize(d)
 
-def get_wordle_uniform_distribution():
+def get_wordle_uniform_solution_distribution():
   return get_custom_distribution(WORDLE_ANSWERS_FILENAME)
 
 def load_guesses_from_file(guesses_filename):
@@ -220,12 +220,16 @@ def load_guesses_from_file(guesses_filename):
 
 def report_usage_and_exit():
   print("Usage: The prior distribution is specified in first 2 or 3 args.\nValid options are: `python3 wordle.py english`, `python3 wordle.py uniform`, or `python3 wordle.py custom path/to/prior_distribution.txt`")
+  print("")
   print("After specifying the prior distribution, you may optionally add the flags --compute-first-guess and/or --exhaustive, which change the wordle solver's algorithm.")
+  print("")
   print("By default, the wordle utility will help you through a real game of wordle. Adding the flag --test will instead simulate wordle games on each word in WORDLE_TEST_FILENAME, and report statistics.")
+  print("")
   print("Adding the flag --testword=[five-letter-word] will simulate a single wordle game on a specific word. Do not use quotes.")
+  print("")
   print("Flags can be in any order after the arguments which specify the prior distribution.")
+  print("")
   print("The utility only pays attention to the first --testword, and ignores any --testword if --test is also specified.")
-  print("See Github for more detailed meaning of each flag.")
   exit(0)
 
 def detect_test_flag(argv):
@@ -268,14 +272,22 @@ def test_and_report_on_test_set(word_data, config):
   f = open(WORDLE_TEST_FILENAME, 'r')
   stats = []
   failures = []
+  count = 0
   for line in f:
+    count += 1
+    #if count > 100:
+    #  break
     word = line.strip()
     turns = simulate_wordle_on_word(word_data, config, word)
     print(word, display_turns(turns))
+    if turns != -1:
+      stats.append(turns)
+    else:
+      failures.append(word)
   f.close()
   
   print("Failures: ", failures)
-  print("Means # turns on successful words: ", stats.sum()/max(1, len(stats)))
+  print("Means # turns on successful words: ", sum(stats)/max(1, len(stats)))
   
 
 def play_guessing_game(word_data, config):
@@ -339,8 +351,8 @@ if __name__ == "__main__":
   distribution_option = sys.argv[1]
   if distribution_option == "english":
     answer_distribution = get_wordfreq_distribution()
-  elif distribution_option == "uniform":
-    answer_distribution = get_wordle_uniform_distribution()
+  elif distribution_option == "uniform_solution":
+    answer_distribution = get_wordle_uniform_solution_distribution()
   elif distribution_option == "custom":
     if len(sys.argv) < 3:
       report_usage_and_exit()
