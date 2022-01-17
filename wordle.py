@@ -2,10 +2,10 @@ from wordfreq import get_frequency_dict
 import numpy as np
 import sys
 
-WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses2.txt"
-WORDLE_ANSWERS_FILENAME = "wordlist_solutions.txt"
+WORDLE_GUESSES_FILENAME = "wordle_allowed_guesses.txt"
+WORDLE_ANSWERS_FILENAME = "wordle_solutions.txt"
 
-WORDLE_TEST_FILENAME = "wordlist_solutions.txt"
+WORDLE_TEST_FILENAME = "wordle_solutions.txt"
 
 # for the unchanging uniform and english distributions, we can save time by precomputing the first guess.
 # UNIFORM_SOLUTION Here are your recommended guesses, best guess first:  ['alter', 'trace', 'raise', 'irate', 'hater']
